@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "My Content Script Extension",
+  "version": "1.0",
+  "description": "A simple Chrome extension with a content script.",
+  "permissions": [
+    "activeTab"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.vocabulary.com/*"],
+      "js": ["bundle.js"]
+    }
+  ]
+}
