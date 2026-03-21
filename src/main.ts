@@ -1,552 +1,528 @@
-import { Socket } from "../node_modules/socket.io-client/build/esm/index";
-import { io } from "../node_modules/socket.io-client/build/esm/index";
-
+// main.ts
 function wait(ms: number) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 type MultipleChoiceMemoryEntry = {
-    question: string
-    correctChoice: string
-    possibleChoices: string[]
-}
+    question: string;
+    correctChoice: string;
+    possibleChoices: string[];
+};
 
 type IconPositionEntry = {
-    x: number
-    y: number
-}
+    x: number;
+    y: number;
+};
 
 const CHOICE_X = 460;
 const CHOICE_Y_START = 364;
 const CHOICE_Y_INTERVAL = 56;
 
 function isUseless(str: string) {
-    if (!str) return true; // null, undefined, or empty string
-
-    // Remove whitespace, newlines, tabs
-    const cleaned = str.replace(/\s+/g, '');
-
-    // Check for specific "useless" words
+    if (!str) return true;
+    const cleaned = str.replace(/\s+/g, "");
     const uselessWords = ["string"];
     if (uselessWords.includes(cleaned.toLowerCase())) return true;
-
-    // If nothing meaningful left, consider it useless
     return cleaned.length === 0;
 }
 
 function getElementScreenCoordinates(el: HTMLElement) {
-    // Get the element's bounding box relative to the viewport
     const rect = el.getBoundingClientRect();
-
-    // Browser window's position on the screen
     const screenX = window.screenX ?? window.screenLeft;
     const screenY = window.screenY ?? window.screenTop;
-
-    // Window chrome offset (browser UI like tabs, toolbars)
     const chromeX = window.outerWidth - window.innerWidth;
     const chromeY = window.outerHeight - window.innerHeight;
-
-    // Scroll offsets
     const scrollX = window.scrollX;
     const scrollY = window.scrollY;
-
-    // Compute the absolute screen coordinates
-    const x = rect.left + screenX + (chromeX / 2) + scrollX;
-    const y = rect.top + screenY + chromeY - scrollY; // some browsers include toolbar height in outerHeight
-
+    const x = rect.left + screenX + chromeX / 2 + scrollX;
+    const y = rect.top + screenY + chromeY - scrollY;
     return { x, y };
 }
 
 function arraysSameSet(a: any[], b: any[]) {
-    return new Set(a).size === new Set(b).size &&
-        [...new Set(a)].every(val => new Set(b).has(val));
+    return (
+        new Set(a).size === new Set(b).size &&
+        [...new Set(a)].every((val) => new Set(b).has(val))
+    );
 }
 
 function cleanString(s: string) {
-    return s.replace(/[\n\t]/g, ""); // remove newlines and tabs
+    return s.replace(/[\n\t]/g, "");
 }
 
-class App {
+// ----- Background messaging helpers -----
+type BgResponse = { ok: true; data?: any } | { ok: false; error: string };
 
-    private socket!: Socket;
-    private addr: string;
+function sendToBackground<T = any>(message: any): Promise<T> {
+    return new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(message, (response: unknown) => {
+            // Check if lastError exists
+            if ((chrome.runtime as any).lastError) {
+                reject(new Error((chrome.runtime as any).lastError.message));
+                return;
+            }
+
+            if (!response) {
+                reject(new Error("No response from background"));
+                return;
+            }
+
+            const resp = response as {
+                ok?: boolean;
+                error?: string;
+                data?: any;
+            };
+            if (resp.ok === false) {
+                reject(new Error(resp.error));
+                return;
+            }
+
+            resolve((resp.data ?? resp) as T);
+        });
+    });
+}
+
+export class App {
     private questionWrapper: HTMLDivElement | null = null;
     private multipleChoiceMemory: MultipleChoiceMemoryEntry[] = [];
-    private imageMemory: { [key: string]: string } = {}; // Will store the image to the specific URL
+    private imageMemory: { [key: string]: string } = {};
     private blurbMemory: Set<string> = new Set();
     private knownWordsInList: Set<string> = new Set();
+    private logBox: HTMLParagraphElement | null = null;
+    private logContent: string = "";
 
-    constructor(addr: string = "ws://127.0.0.1:5000") {
-        this.addr = addr;
-
+    constructor() {
         this.m_initialize();
-        //this.m_testLoop();
     }
 
-    private emitAsync(event: any, data: any) {
-        return new Promise((resolve) => {
-            this.socket.emit(event, data, (response: any) => {
-                resolve(response);
-            });
+    private emitAsync(event: string, data: any) {
+        return sendToBackground({
+            type: "socket:emit",
+            requestId: crypto.randomUUID(),
+            event,
+            data,
         });
     }
 
-    private m_isMultipleChoiceQuestionInMemory(question: string, choices: string[]) {
-        // New implementation allows for multiple memories, same instruction
-        for (const memory of this.multipleChoiceMemory) {
-            if (memory.question != question) continue;
-            if (!arraysSameSet(choices, memory.possibleChoices)) continue;
-            return memory.correctChoice;
-        }
-
-    }
-
-    private m_addMultipleChoiceMemory(question: string, choices: string[], correctChoice: string) {
-        if (this.m_isMultipleChoiceQuestionInMemory(question, choices) != null) return;
-        this.multipleChoiceMemory.push({ question: question, possibleChoices: choices, correctChoice: correctChoice });
-    }
-
-    private m_deleteMultipleChoiceFromMemory(question: string, choices: string[]) {
-        let i = -1;
-        for (const memory of this.multipleChoiceMemory) {
-            i++;
-            if (memory.question != question) continue;
-            if (!arraysSameSet(choices, memory.possibleChoices)) continue;
-            this.multipleChoiceMemory.splice(i, 1);
-            return;
-
-        }
-    }
-
-
     private async m_getQuestionWrapper() {
-
-        const questionPane = document.querySelector(".questionPane") as HTMLDivElement | null;
-
-        if (questionPane == null) {
-            throw new Error("Page has no .questionPane");
-        }
-
+        const questionPane = document.querySelector(
+            ".questionPane",
+        ) as HTMLDivElement | null;
+        if (!questionPane) throw new Error("Page has no .questionPane");
         const lastChild = questionPane.lastElementChild;
-        if (lastChild == null) {
-            throw new Error(".questionPane has no lastChild");
-        }
-
+        if (!lastChild) throw new Error(".questionPane has no lastChild");
         this.questionWrapper = lastChild as HTMLDivElement;
-
-        this.questionWrapper.style.backgroundColor = 'red';
     }
 
     private async m_getIconPositions(): Promise<IconPositionEntry[]> {
-        return await this.emitAsync("locateChoices", null) as IconPositionEntry[];
-    }
-    private async m_getSimilarities(target: string, words: string[]) {
-        return await this.emitAsync("similarity", { target: target, words: words }) as number[];
+        return (await this.emitAsync(
+            "locateChoices",
+            null,
+        )) as IconPositionEntry[];
     }
 
-    private async m_click(data: { x: number, y: number }) {
+    private async m_getSimilarities(target: string, words: string[], word: string) {
+        const probabilities: {[key: string]: number} = await this.emitAsync("similarity", {
+            words: words,
+            target: target,
+            word: word
+        })
+        
+        // align to original order
+        const probabilities_array: number[] = [];
+        for (const word of words) {
+            console.log("word:", word.trim())
+            console.log("prob:",probabilities[word.trim()])
+            probabilities_array.push(probabilities[word.trim()]!);
+        }
+
+        console.log("probabilities:", probabilities_array);
+        console.log("original: ", probabilities);
+
+        return probabilities_array;
+    }
+
+    private async m_click(data: { x: number; y: number }) {
         await this.emitAsync("click", { x: data.x, y: data.y });
     }
 
     private m_isCorrect() {
         if (!this.questionWrapper) throw new Error("No question wrapper");
-        const statusElement: HTMLDivElement | null = this.questionWrapper.querySelector(".status");
-
+        const statusElement: HTMLDivElement | null =
+            this.questionWrapper.querySelector(".status");
         if (!statusElement) throw new Error("No status");
-
-        if (statusElement.classList.contains("correct") == true) return true;
-        return false;
+        return statusElement.classList.contains("correct");
     }
 
-    private async m_getSimilaritiesOrRandom(targetWord: string | null, choices: string[]) {
-        if (!targetWord) {
-            const list = [];
-            for (const choice of choices) {
-                list.push(Math.random());
-            }
-            console.warn("Picked random similarities")
-            return list;
-        } else {
-
-            // Clean the answers
-
-            const targetCleaned = cleanString(targetWord);
-            const choicesCleaned = [];
-
-            for (const choice of choices) {
-                choicesCleaned.push(cleanString(choice));
-            }
-
-            return await this.m_getSimilarities(targetCleaned, choicesCleaned);
+    private m_isMultipleChoiceQuestionInMemory(
+        question: string,
+        choices: string[],
+    ) {
+        for (const memory of this.multipleChoiceMemory) {
+            if (memory.question !== question) continue;
+            if (!arraysSameSet(choices, memory.possibleChoices)) continue;
+            return memory.correctChoice;
         }
+    }
+
+    private m_addMultipleChoiceMemory(
+        question: string,
+        choices: string[],
+        correctChoice: string,
+    ) {
+        if (this.m_isMultipleChoiceQuestionInMemory(question, choices) != null)
+            return;
+        this.multipleChoiceMemory.push({
+            question,
+            possibleChoices: choices,
+            correctChoice,
+        });
+    }
+
+    private m_deleteMultipleChoiceFromMemory(
+        question: string,
+        choices: string[],
+    ) {
+        let i = -1;
+        for (const memory of this.multipleChoiceMemory) {
+            i++;
+            if (memory.question !== question) continue;
+            if (!arraysSameSet(choices, memory.possibleChoices)) continue;
+            this.multipleChoiceMemory.splice(i, 1);
+            return;
+        }
+    }
+
+    private async m_getSimilaritiesOrRandom(
+        questionContent: string | null,
+        wordContent: string,
+        choices: string[],
+    ) {
+        if (!questionContent) return choices.map(() => Math.random());
+        const targetCleaned = cleanString(questionContent);
+        const choicesCleaned = choices.map(cleanString);
+        return await this.m_getSimilarities(targetCleaned, choicesCleaned, wordContent);
     }
 
     private m_boostKnownWords(probabilityList: number[], wordList: string[]) {
-        
-        // Boost probability for words known to be in the list for fill in the blank.
+        return wordList.map((word, idx) => {
+            const prob = probabilityList[idx];
+            if (prob == null) return;
+            if (this.knownWordsInList.has(cleanString(word).toLowerCase()))
+                return prob * 2.5;
+            return prob;
+        });
+    }
 
-        const newProbList = [];
-        let index= 0 ;
-        for (const word of wordList) {
-            
-            const prob = probabilityList[index];
-            if (prob == null) {
-                console.error("No probability at index: ", index, " probability list: ", probabilityList);
-                return;
-            };
-            if (this.knownWordsInList.has(cleanString(word).toLowerCase())) {
-                newProbList.push(prob * 2.5); // Boost probability if we think word is in the list
-            } else {
-                newProbList.push(prob);
-            }
-            index++;
-        }
-
-        return newProbList;
+    private async m_recordQuestion(questionText: string, answer: string, possibleAnswers: string[]) {
+        await this.emitAsync("report_question_data", {
+            question_content: cleanString(questionText),
+            answer: answer,
+            question_type: "question",
+            possible_answers: possibleAnswers
+        });
     }
 
     private async m_tryChoices() {
         if (!this.questionWrapper) return;
-        const choicesElement: HTMLDivElement | null = this.questionWrapper.querySelector(".choices");
-        const questionElement: HTMLDivElement | null = this.questionWrapper.querySelector(".questionContent");
-        const instructionsElement: HTMLDivElement | null = this.questionWrapper.querySelector(".instructions");
+        const choicesElement = this.questionWrapper.querySelector(
+            ".choices",
+        ) as HTMLDivElement | null;
+        const questionElement = this.questionWrapper.querySelector(
+            ".questionContent",
+        ) as HTMLDivElement | null;
+        const instructionsElement = this.questionWrapper.querySelector(
+            ".instructions",
+        ) as HTMLDivElement | null;
+        if (!choicesElement || !questionElement || !instructionsElement)
+            throw new Error("Missing elements");
 
-        if (!choicesElement || !questionElement || !instructionsElement) throw new Error("Missing elements");
-
-        const choices = Array.from(choicesElement.children) as HTMLAnchorElement[];
-        const questionContent = questionElement.textContent + instructionsElement.textContent;;
-
-        let targetWord = null;
-        const targetWordElement = instructionsElement.querySelector("strong")
-        if (targetWordElement) {
-            targetWord = targetWordElement.textContent;
+        const choices = Array.from(
+            choicesElement.children,
+        ) as HTMLAnchorElement[];
+        const questionContent =
+            (questionElement.textContent ?? "") +
+            (instructionsElement.textContent ?? "");
+        const targetWordElement = instructionsElement.querySelector("strong");
+        let targetWord = targetWordElement?.textContent;
+        if (targetWord)
             this.knownWordsInList.add(cleanString(targetWord).toLowerCase());
-        }
 
+        // Check memory
+        const possibleAnswers = choices.map((c) => c.textContent ?? "");
+        const memorized = this.m_isMultipleChoiceQuestionInMemory(
+            questionContent,
+            possibleAnswers,
+        );
 
-
-        console.log("Question is: ", questionContent);
-
-        // Do we already know the answer?
-
-
-        //await this.m_click({ x: 100, y: 100 });
-        //await wait(1000);
-
-
-        // Get the possible answers
-
-        let possibleAnswers: string[] = [];
-
-        for (const choice of choices) {
-            possibleAnswers.push(choice.textContent);
-        }
-
-        const memorized = this.m_isMultipleChoiceQuestionInMemory(questionContent, possibleAnswers);
         if (memorized) {
-            // We already know the answer
-
-            let index = 0;
-
             const iconPositions = await this.m_getIconPositions();
+            choices.forEach(async (choice, idx) => {
+                if (choice.textContent === memorized) {
+                    const pos = iconPositions[idx];
+                    if (pos) await this.m_click(pos);
+                }
+            });
+            return;
+        }
 
+        // Otherwise similarity guess
+        const sentenceElement = questionElement.querySelector(".sentence");
+        const sentence =
+            sentenceElement && sentenceElement.textContent?.includes("_")
+                ? cleanString(sentenceElement.textContent)
+                : (targetWord ?? "");
+        let questionContentSimilarity = questionContent + "\n" + sentence;
+        const similaritiesUnprocessed = await this.m_getSimilaritiesOrRandom(
+            questionContentSimilarity,
+            targetWord ?? "",
+            possibleAnswers
+            
+        );
+        const similarities = this.m_boostKnownWords(
+            similaritiesUnprocessed,
+            possibleAnswers,
+        );
+        const scored = possibleAnswers
+            .map((answer, i) => ({ answer, score: similarities[i] ?? 0 }))
+            .sort((a, b) => b.score - a.score)
+            .map((x) => x.answer);
+
+        for (const answer of scored) {
             for (const choice of choices) {
-                if (memorized == choice.textContent) {
-                    console.log("Answer memorized");
-                    // Where choice is a anchor element
-                    // We need to get the position on screen in the whole screen (not just web viewport)
-
-
-                    const p = iconPositions[index];
-                    if (!p) return;
-
-                    await this.m_click({ x: p.x, y: p.y });
-
-                    await wait(1000);
-
-                    if (this.m_isCorrect() == false) {
-                        this.m_deleteMultipleChoiceFromMemory(questionContent, possibleAnswers);
-                    }
-
+                if (choice.textContent !== answer) continue;
+                const coords = getElementScreenCoordinates(choice);
+                await this.m_click({ x: coords.x + 10, y: coords.y + 10 });
+                await wait(1000);
+                if (this.m_isCorrect()) {
+                    this.m_recordQuestion(questionContentSimilarity, answer, possibleAnswers)
                     return;
                 }
-
-                index++;
             }
-
-            this.m_deleteMultipleChoiceFromMemory(questionContent, possibleAnswers);
-        } else {
-            // We're forced to make a guess based on similarity
-
-            //const iconPositions = await this.m_getIconPositions();
-
-            const sentenceElement = questionElement.querySelector(".sentence");
-            let sentence = null;
-            if (sentenceElement && sentenceElement.textContent.includes("_")) sentence = cleanString(sentenceElement.textContent); // No fill-in the blank right now
-
-            const similarities_unprocessed = await this.m_getSimilaritiesOrRandom(sentence || targetWord, possibleAnswers);
-
-            const similarities = this.m_boostKnownWords(similarities_unprocessed, possibleAnswers);
-            if (!similarities) throw new Error("Failed to perform post-process of similarities");
-
-            const scored: { answer: string; score: number }[] = possibleAnswers.map((answer, i) => ({
-                answer,
-                score: similarities[i]!, // non-null assertion
-            }));
-
-            const sorted = scored
-                .sort((a, b) => b.score - a.score)
-                .map(x => x.answer);
-            
-
-
-            let index = 0;
-            for (const answer of sorted) {
-                for (const choice of choices) {
-                    if (choice.textContent != answer) continue;
-                    console.log("Guess");   
-                    //const p = iconPositions[index];
-                    //if (!p) return;
-
-                    const screenCoords = getElementScreenCoordinates(choice);
-
-                    await this.m_click({ x: screenCoords.x + 10, y: screenCoords.y + 10 });
-                    await wait(1000);
-                    //this.socket.emit("click", { x: screenCoords.x + 10, y: screenCoords.y + 10 });
-
-                    //await wait(1000);
-
-                    if (this.m_isCorrect()) {
-                        console.log("Is correct");
-
-                        this.m_addMultipleChoiceMemory(questionContent, possibleAnswers, choice.textContent);
-                        return;
-                    }
-                    index++;
-                }
-
-
-            }
-
-
         }
-
     }
 
     private m_isSpelling() {
-        if (!this.questionWrapper) return false;
-        return this.questionWrapper.querySelector(".spellit") != null;
+        return !!this.questionWrapper?.querySelector(".spellit");
+    }
+    private m_isImageQuestion() {
+        return !!this.questionWrapper?.querySelector(".typeI");
+    }
+    private m_isSummaryScreen() {
+        return !!this.questionWrapper?.querySelector(".roundSummary");
+    }
+    private m_isAchievementScreen() {
+        return !!this.questionWrapper?.querySelector(".hero");
     }
 
-    private m_isImageQuestion() {
-        if (!this.questionWrapper) return false;
-        return this.questionWrapper.querySelector(".typeI") != null;
+    private async m_clickNext() {
+        const nextButton = document.querySelector(
+            '[aria-label="Next question"]',
+        ) as HTMLButtonElement | null;
+        if (!nextButton) return;
+        const nextButtonSpan = nextButton.querySelector(
+            "span",
+        ) as HTMLSpanElement | null;
+        if (!nextButtonSpan) return;
+        const coords = getElementScreenCoordinates(nextButtonSpan);
+        await this.m_click({ x: coords.x, y: coords.y });
+    }
+
+    private m_rememberBlurb() {
+        if (!this.questionWrapper || !this.m_isCorrect()) return;
+        const blurb = this.questionWrapper.querySelector(".blurb");
+        if (blurb) this.blurbMemory.add(blurb.textContent ?? "");
+    }
+
+    private m_hookLog() {
+        chrome.runtime.onMessage.addListener(
+            (
+                msg: any,
+                _sender: chrome.runtime.MessageSender,
+                _sendResponse: (response?: any) => void,
+            ): boolean | Promise<any> | undefined => {
+                if (!msg || msg.type !== "socket:event" || msg.event !== "log")
+                    return undefined;
+
+                this.logContent += String(msg.data);
+                if (!this.logBox) return undefined;
+
+                this.logBox.style.lineHeight = "1em";
+                this.logBox.style.height = "3em";
+                this.logBox.style.overflowY = "auto";
+                this.logBox.style.fontFamily = "monospace";
+                this.logBox.style.whiteSpace = "pre-wrap";
+                this.logBox.style.wordBreak = "break-word";
+                this.logBox.style.position = "fixed";
+                this.logBox.style.bottom = "0%";
+                this.logBox.style.left = "0%";
+                this.logBox.style.color = "white";
+                this.logBox.textContent = this.logContent;
+                this.logBox.scrollTop = this.logBox.scrollHeight;
+
+                return undefined; // explicitly return undefined instead of void
+            },
+        );
+    }
+
+    private m_refreshLogP() {
+        const newP = document.createElement("p");
+        document.body.appendChild(newP);
+        this.logBox = newP;
+        this.logContent = "";
+    }
+    private async m_solveSpelling() {
+        if (!this.questionWrapper) return;
+
+        await this.m_click({ x: 100, y: 100 });
+        await wait(1000);
+
+        const completedSentenceElement =
+            this.questionWrapper.querySelector(".complete");
+        if (!completedSentenceElement)
+            throw new Error("No completed sentence element");
+
+        const theWord = completedSentenceElement.querySelector("strong");
+        if (!theWord) throw new Error("No STRONG");
+
+        const playButtons = (await this.emitAsync(
+            "locateSpell",
+            null,
+        )) as IconPositionEntry[];
+        const spellButtons = (await this.emitAsync(
+            "locateSpellButton",
+            null,
+        )) as IconPositionEntry[];
+
+        const typeCoords = playButtons[0];
+        const spellCoords = spellButtons[0];
+
+        if (!typeCoords || !spellCoords) throw new Error("Missing buttons");
+
+        await this.m_click({ x: typeCoords.x + 50, y: typeCoords.y });
+        await wait(1000);
+
+        await this.emitAsync("type", theWord.textContent);
+
+        await wait((theWord.textContent?.length ?? 1) * 100);
+
+        await this.m_click({ x: spellCoords.x, y: spellCoords.y });
+        await wait(1000);
     }
 
     private async m_solveImageQuestion() {
         if (!this.questionWrapper) return;
 
-        // Test
-
-        const wordElement: HTMLDivElement | null = this.questionWrapper.querySelector(".word");
-
+        const wordElement = this.questionWrapper.querySelector(
+            ".word",
+        ) as HTMLDivElement | null;
         if (!wordElement) return;
 
-        //const coords = getElementScreenCoordinates(wordElement);
-
-        //this.socket.emit("click", {x: coords.x, y: coords.y});
-
-        const choicesElement: HTMLDivElement | null = this.questionWrapper.querySelector(".choices");
+        const choicesElement = this.questionWrapper.querySelector(
+            ".choices",
+        ) as HTMLDivElement | null;
         if (!choicesElement) return;
 
-        if (this.imageMemory[wordElement.textContent] == null) {
-            // Guess and remember
+        const word = wordElement.textContent ?? "";
+
+        if (this.imageMemory[word] == null) {
             for (const choice of choicesElement.children) {
                 const style = (choice as HTMLElement).style.backgroundImage;
-                const coords = getElementScreenCoordinates(choice as HTMLElement);
+                const coords = getElementScreenCoordinates(
+                    choice as HTMLElement,
+                );
 
                 await this.m_click({ x: coords.x + 50, y: coords.y + 50 });
                 await wait(1000);
 
-                if (this.m_isCorrect() == true) {
-                    this.imageMemory[wordElement.textContent] = style;
+                if (this.m_isCorrect()) {
+                    this.imageMemory[word] = style;
                     return;
                 }
             }
         } else {
-            // Use already remembered answer
-
-            const appropriateStyle = this.imageMemory[wordElement.textContent];
+            const correctStyle = this.imageMemory[word];
 
             for (const choice of choicesElement.children) {
                 const style = (choice as HTMLElement).style.backgroundImage;
-                if (appropriateStyle == style) {
-                    const coords = getElementScreenCoordinates(choice as HTMLElement);
+
+                if (style === correctStyle) {
+                    const coords = getElementScreenCoordinates(
+                        choice as HTMLElement,
+                    );
+
                     await this.m_click({ x: coords.x + 50, y: coords.y + 50 });
                     await wait(1000);
-                    if (this.m_isCorrect() == false) {
-                        delete this.imageMemory[wordElement.textContent]; // Delete bad memory
+
+                    if (!this.m_isCorrect()) {
+                        delete this.imageMemory[word];
                     }
+
                     return;
                 }
             }
 
-            // Nothing found, bad image memory delete
-
-            delete this.imageMemory[wordElement.textContent];
+            delete this.imageMemory[word];
         }
-
-
-
-        await wait(100000);
-    }
-
-    private async m_solveSpelling() {
-        if (!this.questionWrapper) return;
-
-        await this.m_click({ x: 100, y: 100 }) // Move mouse out of the way to prevent it from hiding recognition
-        await wait(1000);
-
-        // Yes! Apparently, they conveniently left out a completed sentence element where the word is in <strong> tags.
-
-        const completedSentenceElement = this.questionWrapper.querySelector(".complete");
-        if (!completedSentenceElement) throw new Error("No completed sentence elemnt");
-        const theWord = completedSentenceElement.querySelector("strong");
-        if (!theWord) throw new Error("No STRONG");
-
-        console.log("Spelling word is: ", theWord.textContent);
-
-        // Locate the spell button
-
-        const playButtons = await this.emitAsync("locateSpell", null) as IconPositionEntry[];
-        const spellButtons = await this.emitAsync("locateSpellButton", null) as IconPositionEntry[];
-
-        // Only consider the first one because too lazy
-
-        const typeCoords = playButtons[0];
-        const spellCoords = spellButtons[0];
-        if (!typeCoords) throw new Error("No play button found");
-        if (!spellCoords) throw new Error("No spell button found");
-
-        await this.m_click({ x: typeCoords.x + 50, y: typeCoords.y });
-        await wait(1000);
-        this.socket.emit("type", theWord.textContent);
-
-
-
-        await wait(theWord.textContent.length * 100);
-
-        await this.m_click({ x: spellCoords.x, y: spellCoords.y });
-        await wait(1000);
-        //spellit
-    }
-
-    private async m_clickNext() {
-        const nextButton: HTMLButtonElement | null = document.querySelector('[aria-label="Next question"]');
-        if (!nextButton) return;
-        const nextButtonSpan: HTMLSpanElement | null = nextButton.querySelector("span");
-        if (!nextButtonSpan) return;
-
-        const screenCoords = getElementScreenCoordinates(nextButtonSpan);
-        await this.m_click({x: screenCoords.x, y: screenCoords.y});
-
-        //nextButton.click();
-    }
-
-    private m_isSummaryScreen() {
-        if (!this.questionWrapper) return false;
-        return this.questionWrapper.querySelector(".roundSummary") != null;
-    }
-    private m_isAchievementScreen() {
-        if (!this.questionWrapper) return false;
-        return this.questionWrapper.querySelector(".hero") != null;
-    }
-
-    private m_rememberBlurb() {
-        if (!this.questionWrapper) return;
-        if (this.m_isCorrect() == false) return;
-
-        const blurb = this.questionWrapper.querySelector(".blurb");
-        if (!blurb) throw new Error("No blurb");
-
-        this.blurbMemory.add(blurb.textContent);
     }
 
     private async m_botLoop() {
+        await this.m_refreshLogP();
         while (true) {
             await wait(500);
             await this.m_getQuestionWrapper();
+
             if (this.m_isSummaryScreen()) {
                 await wait(2000);
                 await this.m_clickNext();
                 continue;
             }
-
             if (this.m_isSpelling()) {
-                console.log("IT IS A SPELLING THING")
-                await this.m_solveSpelling();
+                await wait(2000);
+                await this.m_solveSpelling()
                 await wait(2000);
                 await this.m_clickNext();
                 continue;
             }
-
             if (this.m_isImageQuestion()) {
-                await this.m_solveImageQuestion();
+                await wait(2000);
+                await this.m_solveImageQuestion()
+                await wait(2000);
+                await this.m_clickNext();
+                continue;
+            }
+            if (this.m_isAchievementScreen()) {
                 await wait(2000);
                 await this.m_clickNext();
                 continue;
             }
 
-            if (this.m_isAchievementScreen()) {
-                console.log("IS ACHIEVEMENT SCREEN");
-                await wait(2000);
-                await this.m_clickNext();
-                continue;
-            }
-            await this.m_getQuestionWrapper();
             await this.m_tryChoices();
             await wait(2000);
             if (this.m_isCorrect()) {
                 this.m_rememberBlurb();
                 await this.m_clickNext();
             }
-
             await wait(1000);
         }
     }
 
     private async m_initialize() {
-        this.m_connectToServer();
+        this.m_hookLog();
         await wait(2000);
-        this.m_getQuestionWrapper();
+        await this.m_getQuestionWrapper();
+        this.m_refreshLogP();
         this.m_botLoop();
     }
-
-    private async m_connectToServer() {
-        try {
-            this.socket = io(this.addr);
-        } catch (err) {
-            console.error("Failed to connect to server: ", err);
-            alert(`Failed to connect to the server: ${err}`);
-
-            throw new Error("Failed to connect to the server");
-        }
-
-    }
-
 }
 
 function onLoad() {
-    console.log("Loading app successfully!");
-
     try {
-        const app: App = new App();
-    } catch (error) {
-        console.error("Failed to initialize: ", error);
+        new App();
+    } catch (err) {
+        console.error("Failed to initialize:", err);
         alert("Failed to initialize");
     }
-
-
 }
 
 window.onload = onLoad;

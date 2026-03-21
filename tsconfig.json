@@ -7,9 +7,10 @@
 
     // Environment Settings
     // See also https://aka.ms/tsconfig/module
-    "module": "es6",
+    "module": "nodenext",
     "target": "esnext",
-    "types": [],
+    "moduleResolution": "nodenext",
+    "types": ["chrome-types"],
     // For nodejs:
     // "lib": ["esnext"],
     // "types": ["node"],
