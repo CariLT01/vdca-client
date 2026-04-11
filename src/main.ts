@@ -14,6 +14,20 @@ type IconPositionEntry = {
     y: number;
 };
 
+enum QuestionType {
+    MULTIPLE_CHOICE = 0,
+    IMAGE = 1
+}
+
+type QuestionData = {
+    questionHash: string;
+    questionText: string;
+    answers: string[];
+    correctAnswer: string;
+    targetWord: string;
+    questionType: QuestionType;
+    contextualSentence: string;
+}
 const CHOICE_X = 460;
 const CHOICE_Y_START = 364;
 const CHOICE_Y_INTERVAL = 56;
@@ -91,6 +105,8 @@ export class App {
     private logBox: HTMLParagraphElement | null = null;
     private logContent: string = "";
 
+    private isVariantCollector: boolean = true;
+
     constructor() {
         this.m_initialize();
     }
@@ -101,6 +117,14 @@ export class App {
             requestId: crypto.randomUUID(),
             event,
             data,
+        });
+    }
+
+    private fetchAsync(url: string, init: RequestInit) {
+        return sendToBackground({
+            type: "fetch",
+            url: url,
+            init: init
         });
     }
 
@@ -122,17 +146,17 @@ export class App {
     }
 
     private async m_getSimilarities(target: string, words: string[], word: string) {
-        const probabilities: {[key: string]: number} = await this.emitAsync("similarity", {
+        const probabilities: { [key: string]: number } = await this.emitAsync("similarity", {
             words: words,
             target: target,
             word: word
         })
-        
+
         // align to original order
         const probabilities_array: number[] = [];
         for (const word of words) {
             console.log("word:", word.trim())
-            console.log("prob:",probabilities[word.trim()])
+            console.log("prob:", probabilities[word.trim()])
             probabilities_array.push(probabilities[word.trim()]!);
         }
 
@@ -277,7 +301,7 @@ export class App {
             questionContentSimilarity,
             targetWord ?? "",
             possibleAnswers
-            
+
         );
         const similarities = this.m_boostKnownWords(
             similaritiesUnprocessed,
@@ -288,18 +312,60 @@ export class App {
             .sort((a, b) => b.score - a.score)
             .map((x) => x.answer);
 
+        let correctAnswer: string | null = null;
+
+        
+
         for (const answer of scored) {
+
+            if (correctAnswer != null) {
+                break;
+            }
+
             for (const choice of choices) {
                 if (choice.textContent !== answer) continue;
                 const coords = getElementScreenCoordinates(choice);
                 await this.m_click({ x: coords.x + 10, y: coords.y + 10 });
                 await wait(1000);
                 if (this.m_isCorrect()) {
-                    this.m_recordQuestion(questionContentSimilarity, answer, possibleAnswers)
-                    return;
+                    this.m_recordQuestion(questionContentSimilarity, answer, possibleAnswers);
+                    correctAnswer = answer;
+                    break;
                 }
             }
         }
+
+        // upload
+
+        try {
+            if (correctAnswer == null) {
+                throw new Error("Correct answer cannot be null!");
+            }
+
+            if (!targetWord) {
+                throw new Error("No target word!");
+            }
+
+            const questionData: QuestionData = {
+                questionText: instructionsElement.textContent,
+                answers: possibleAnswers,
+                correctAnswer: correctAnswer,
+                targetWord: targetWord,
+                questionType: QuestionType.MULTIPLE_CHOICE,
+                contextualSentence: sentenceElement ? (sentenceElement.textContent ?? "") : "",
+                questionHash: cleanString(questionContentSimilarity)
+            }
+
+            await this.m_postQuestionData(questionData);
+
+            console.log("Uploaded question analytics");
+
+        } catch (e) {
+            console.error("Failed to upload question analytics: ", e);
+        }
+
+
+
     }
 
     private m_isSpelling() {
@@ -313,6 +379,45 @@ export class App {
     }
     private m_isAchievementScreen() {
         return !!this.questionWrapper?.querySelector(".hero");
+    }
+
+    private async m_getNewVariantProbability() {
+        const response = await this.fetchAsync("http://127.0.0.1:5000/api/v1/list/new_variant_probability", {});
+        if (!response.ok) {
+            throw new Error("Failed to fetch new variant probability: request failed");
+        }
+
+        const data = response.body;
+        if (!data.data) {
+            throw new Error("No field 'data' in response");
+        }
+        if (data.data.probability == null) {
+            throw new Error("No field 'probability' in response data");
+        }
+
+        const probability: number = data.data.probability;
+
+        console.log("New variant probability is: ", probability);
+
+        return probability;
+
+    }
+
+    private async m_clickRestart() {
+        const replayButton = document.querySelector(".replay") as HTMLButtonElement | null;
+        if (!replayButton) {
+            throw new Error("Unable to replay: button not found");
+        }
+
+        const coords = getElementScreenCoordinates(replayButton);
+        console.log("Clicking replay");
+
+        console.log("post shouldConfirm = true");
+        window.postMessage({
+            type: "ENABLE_CONFIRM"
+        });
+        await this.m_click({x: coords.x + 10, y: coords.y + 10});
+        console.log("button clicked");
     }
 
     private async m_clickNext() {
@@ -371,6 +476,37 @@ export class App {
         this.logBox = newP;
         this.logContent = "";
     }
+
+    private async m_postQuestionData(questionData: QuestionData) {
+        if (!questionData.answers.includes(questionData.correctAnswer)) {
+            throw new Error("Correct answer is not in answers");
+        }
+
+        console.log("Hash string text is: ", questionData.questionHash);
+
+        const answerIndex = questionData.answers.indexOf(questionData.correctAnswer);
+
+        const response = await this.fetchAsync("http://127.0.0.1:5000/api/v1/question/report", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                question_text: questionData.questionText,
+                contextual_sentence: questionData.contextualSentence,
+                target_word: questionData.targetWord,
+                question_type: questionData.questionType,
+                answers: questionData.answers,
+                correct_answer_index: answerIndex,
+                question_hash: questionData.questionHash
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error("Failed to report question data: request failed: " + response.status + " " + response.statusText);
+        }
+    }
+
     private async m_solveSpelling() {
         if (!this.questionWrapper) return;
 
@@ -466,6 +602,10 @@ export class App {
         }
     }
 
+    private m_isEndingScreen() {
+        return !!this.questionWrapper?.querySelector(".practiceComplete");
+    }
+
     private async m_botLoop() {
         await this.m_refreshLogP();
         while (true) {
@@ -496,6 +636,16 @@ export class App {
                 await this.m_clickNext();
                 continue;
             }
+            if (this.m_isEndingScreen()) {
+                if (this.isVariantCollector) {
+                    await wait(2000);
+                    await this.m_clickRestart();
+                    continue;
+                } else {
+                    break;
+                }
+
+            }
 
             await this.m_tryChoices();
             await wait(2000);
@@ -504,14 +654,71 @@ export class App {
                 await this.m_clickNext();
             }
             await wait(1000);
+
+            if (this.isVariantCollector) {
+                console.log("Collector, fetching new variant probability");
+                const newVariantProbability = await this.m_getNewVariantProbability();
+                if (newVariantProbability < 0.03) {
+                    console.log("Reached 97% chance probabilities collected, ending");
+                    return;
+                }
+            }
         }
     }
 
+    private async m_switchList() {
+
+        const url = window.location.href;
+
+        // Regex explanation:
+        // - \/lists\/ : matches the literal "/lists/" part
+        // - (\d+)     : captures one or more digits (this is the ID)
+        const match = url.match(/\/lists\/(\d+)/);
+        // match[1] contains the captured digits if the regex succeeded
+        const listId = match ? match[1] : null;
+        if (!listId) {
+            throw new Error("Unable to find list ID in URL!");
+        }
+
+        // call switch list
+
+        const listIdInt = parseInt(listId)
+        if (!listIdInt || Number.isNaN(listIdInt)) {
+            throw new Error("Failed to parse list ID, not a valid integer");
+        }
+
+        const response = await this.fetchAsync("http://127.0.0.1:5000/api/v1/list/switch", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                list_id: listIdInt
+            })
+        });
+
+        if (!response.ok) {
+            throw new Error("Failed to switch list to current: request failed: " + response.status + " " + response.statusText);
+        } else {
+            console.log("Switched list ID to: ", listIdInt);
+        }
+    }
+
+    private postConfirmFalse() {
+        console.log("post shouldConfirm = false");
+        window.postMessage({
+            type: "DISABLE_CONFIRM"
+        });
+    }
+
+
     private async m_initialize() {
+        this.m_switchList();
         this.m_hookLog();
         await wait(2000);
         await this.m_getQuestionWrapper();
         this.m_refreshLogP();
+        this.postConfirmFalse();
         this.m_botLoop();
     }
 }

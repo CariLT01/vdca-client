@@ -6,8 +6,10 @@ export declare class App {
     private knownWordsInList;
     private logBox;
     private logContent;
+    private isVariantCollector;
     constructor();
     private emitAsync;
+    private fetchAsync;
     private m_getQuestionWrapper;
     private m_getIconPositions;
     private m_getSimilarities;
@@ -24,13 +26,19 @@ export declare class App {
     private m_isImageQuestion;
     private m_isSummaryScreen;
     private m_isAchievementScreen;
+    private m_getNewVariantProbability;
+    private m_clickRestart;
     private m_clickNext;
     private m_rememberBlurb;
     private m_hookLog;
     private m_refreshLogP;
+    private m_postQuestionData;
     private m_solveSpelling;
     private m_solveImageQuestion;
+    private m_isEndingScreen;
     private m_botLoop;
+    private m_switchList;
+    private postConfirmFalse;
     private m_initialize;
 }
 //# sourceMappingURL=main.d.ts.map

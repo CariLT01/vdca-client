@@ -1,0 +1,1 @@
+(()=>{"use strict";let e=!1;const o=window.confirm;window.confirm=n=>!!e||o(n),window.addEventListener("message",o=>{o.source===window?("ENABLE_CONFIRM"==o.data.type&&(console.log("set flag confirm = true"),e=!0),"DISABLE_CONFIRM"==o.data.type&&(console.log("set flag confirm = false"),e=!1)):console.warn("ignore event: untrusted source")})})();

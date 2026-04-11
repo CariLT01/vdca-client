@@ -18,6 +18,15 @@
             "js": [
                 "main.js"
             ]
+        },
+        {
+            "matches": [
+                "https://www.vocabulary.com/*"
+            ],
+            "js": [
+                "overwrite.js"
+            ],
+            "world": "MAIN"
         }
     ]
 }
