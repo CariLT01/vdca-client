@@ -238,12 +238,13 @@ export class App {
         });
     }
 
-    private async m_recordQuestion(questionText: string, answer: string, possibleAnswers: string[]) {
+    private async m_recordQuestion(questionText: string, answer: string, possibleAnswers: string[], targetWord: string) {
         await this.emitAsync("report_question_data", {
             question_content: cleanString(questionText),
             answer: answer,
             question_type: "question",
-            possible_answers: possibleAnswers
+            possible_answers: possibleAnswers,
+            target_word: targetWord
         });
     }
 
@@ -314,7 +315,6 @@ export class App {
 
         let correctAnswer: string | null = null;
 
-        
 
         for (const answer of scored) {
 
@@ -328,7 +328,7 @@ export class App {
                 await this.m_click({ x: coords.x + 10, y: coords.y + 10 });
                 await wait(1000);
                 if (this.m_isCorrect()) {
-                    this.m_recordQuestion(questionContentSimilarity, answer, possibleAnswers);
+                    this.m_recordQuestion(questionContentSimilarity, answer, possibleAnswers, targetWord ?? "(none)");
                     correctAnswer = answer;
                     break;
                 }
@@ -510,8 +510,7 @@ export class App {
     private async m_solveSpelling() {
         if (!this.questionWrapper) return;
 
-        await this.m_click({ x: 100, y: 100 });
-        await wait(1000);
+        // await this.m_click({ x: 100, y: 100 });
 
         const completedSentenceElement =
             this.questionWrapper.querySelector(".complete");
@@ -536,14 +535,14 @@ export class App {
         if (!typeCoords || !spellCoords) throw new Error("Missing buttons");
 
         await this.m_click({ x: typeCoords.x + 50, y: typeCoords.y });
-        await wait(1000);
+        await wait(150);
 
         await this.emitAsync("type", theWord.textContent);
 
         await wait((theWord.textContent?.length ?? 1) * 100);
 
         await this.m_click({ x: spellCoords.x, y: spellCoords.y });
-        await wait(1000);
+        // await wait(1000);
     }
 
     private async m_solveImageQuestion() {
@@ -569,7 +568,7 @@ export class App {
                 );
 
                 await this.m_click({ x: coords.x + 50, y: coords.y + 50 });
-                await wait(1000);
+                await wait(250);
 
                 if (this.m_isCorrect()) {
                     this.imageMemory[word] = style;
@@ -588,7 +587,7 @@ export class App {
                     );
 
                     await this.m_click({ x: coords.x + 50, y: coords.y + 50 });
-                    await wait(1000);
+                    await wait(250);
 
                     if (!this.m_isCorrect()) {
                         delete this.imageMemory[word];
@@ -609,7 +608,7 @@ export class App {
     private async m_botLoop() {
         await this.m_refreshLogP();
         while (true) {
-            await wait(500);
+            await wait(2000);
             await this.m_getQuestionWrapper();
 
             if (this.m_isSummaryScreen()) {
@@ -618,14 +617,12 @@ export class App {
                 continue;
             }
             if (this.m_isSpelling()) {
-                await wait(2000);
                 await this.m_solveSpelling()
                 await wait(2000);
                 await this.m_clickNext();
                 continue;
             }
             if (this.m_isImageQuestion()) {
-                await wait(2000);
                 await this.m_solveImageQuestion()
                 await wait(2000);
                 await this.m_clickNext();
@@ -648,12 +645,11 @@ export class App {
             }
 
             await this.m_tryChoices();
-            await wait(2000);
+            await wait(250);
             if (this.m_isCorrect()) {
                 this.m_rememberBlurb();
                 await this.m_clickNext();
             }
-            await wait(1000);
 
             if (this.isVariantCollector) {
                 console.log("Collector, fetching new variant probability");
