@@ -14,6 +14,7 @@ export declare class App {
     private m_getIconPositions;
     private m_getSimilarities;
     private m_click;
+    private m_press;
     private m_isCorrect;
     private m_isMultipleChoiceQuestionInMemory;
     private m_addMultipleChoiceMemory;

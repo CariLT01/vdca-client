@@ -170,6 +170,10 @@ export class App {
         await this.emitAsync("click", { x: data.x, y: data.y });
     }
 
+    private async m_press(data: string) {
+        await this.emitAsync("press", data);
+    }
+
     private m_isCorrect() {
         if (!this.questionWrapper) throw new Error("No question wrapper");
         const statusElement: HTMLDivElement | null =
@@ -265,6 +269,15 @@ export class App {
         const choices = Array.from(
             choicesElement.children,
         ) as HTMLAnchorElement[];
+
+        const mapToIndex: Map<string, number> = new Map();
+        let c = 0;
+        for (const chocie of choices) {
+            console.log("choice: ", choices, " c: ", c);
+            mapToIndex.set(chocie.textContent, c );
+            c++;
+        }
+
         const questionContent =
             (questionElement.textContent ?? "") +
             (instructionsElement.textContent ?? "");
@@ -316,16 +329,27 @@ export class App {
         let correctAnswer: string | null = null;
 
 
+        let i = 0;
         for (const answer of scored) {
 
             if (correctAnswer != null) {
                 break;
             }
 
+            i++;
             for (const choice of choices) {
                 if (choice.textContent !== answer) continue;
-                const coords = getElementScreenCoordinates(choice);
-                await this.m_click({ x: coords.x + 10, y: coords.y + 10 });
+                // const coords = getElementScreenCoordinates(choice);
+                // await this.m_click({ x: coords.x + 10, y: coords.y + 10 });
+
+
+                const realIndex = mapToIndex.get(choice.textContent);
+                if (realIndex == null) {
+                    throw new Error("no real index");
+                }
+                console.log("real index:", realIndex, " choice: ", choice);
+
+                await this.m_press((realIndex + 1).toString());
                 await wait(1000);
                 if (this.m_isCorrect()) {
                     this.m_recordQuestion(questionContentSimilarity, answer, possibleAnswers, targetWord ?? "(none)");
@@ -421,7 +445,7 @@ export class App {
     }
 
     private async m_clickNext() {
-        const nextButton = document.querySelector(
+        /* const nextButton = document.querySelector(
             '[aria-label="Next question"]',
         ) as HTMLButtonElement | null;
         if (!nextButton) return;
@@ -430,7 +454,8 @@ export class App {
         ) as HTMLSpanElement | null;
         if (!nextButtonSpan) return;
         const coords = getElementScreenCoordinates(nextButtonSpan);
-        await this.m_click({ x: coords.x, y: coords.y });
+        await this.m_click({ x: coords.x, y: coords.y }); */
+        await this.m_press("right");
     }
 
     private m_rememberBlurb() {
@@ -608,7 +633,7 @@ export class App {
     private async m_botLoop() {
         await this.m_refreshLogP();
         while (true) {
-            await wait(2000);
+            await wait(750);
             await this.m_getQuestionWrapper();
 
             if (this.m_isSummaryScreen()) {
