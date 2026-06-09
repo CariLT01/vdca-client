@@ -24,6 +24,29 @@ function overwriteConfirm() {
         }, 1000);
     }
     
+    // 1. Target the element you want to watch
+    const targetClass = '.blocker';
+
+    console.log(`[Script Started] Watching for ${targetClass} to appear...`);
+
+    // 2. Setup the observer to watch the entire page
+    const observer = new MutationObserver((mutations, obs) => {
+        const element = document.querySelector(targetClass);
+        
+        if (element) {
+            console.log(`[Found] ${targetClass} detected! Refreshing page...`);
+            // Disconnect observer before reloading to free up memory
+            obs.disconnect(); 
+            // Refresh the page
+            window.location.reload();
+        }
+    });
+
+    // 3. Start observing the document body for changes
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
 }
 
 function registerEvents() {

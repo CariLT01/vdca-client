@@ -107,6 +107,8 @@ export class App {
 
     private isVariantCollector: boolean = true;
 
+    private shouldWaitLonger: boolean = false;
+
     constructor() {
         this.m_initialize();
     }
@@ -283,6 +285,18 @@ export class App {
             (instructionsElement.textContent ?? "");
         const targetWordElement = instructionsElement.querySelector("strong");
         let targetWord = targetWordElement?.textContent;
+        if (!targetWord) {
+            const sentence = questionElement.querySelector(".sentence");1
+            if (sentence) {
+                const strongElement = sentence.querySelector("strong");
+                if (strongElement) {
+                    if (!strongElement.textContent.includes("_")) {
+                        targetWord = strongElement.textContent;
+                    }
+                }
+            }
+            
+        }
         if (targetWord)
             this.knownWordsInList.add(cleanString(targetWord).toLowerCase());
 
@@ -634,28 +648,36 @@ export class App {
         await this.m_refreshLogP();
         while (true) {
             await wait(750);
+            if (this.shouldWaitLonger) {
+                await wait(3000);
+                this.shouldWaitLonger = false;
+            }
             await this.m_getQuestionWrapper();
 
             if (this.m_isSummaryScreen()) {
                 await wait(2000);
                 await this.m_clickNext();
+                this.shouldWaitLonger = true;
                 continue;
             }
             if (this.m_isSpelling()) {
                 await this.m_solveSpelling()
                 await wait(2000);
                 await this.m_clickNext();
+                this.shouldWaitLonger = true;
                 continue;
             }
             if (this.m_isImageQuestion()) {
                 await this.m_solveImageQuestion()
                 await wait(2000);
                 await this.m_clickNext();
+                this.shouldWaitLonger = true;
                 continue;
             }
             if (this.m_isAchievementScreen()) {
                 await wait(2000);
                 await this.m_clickNext();
+                this.shouldWaitLonger = true;
                 continue;
             }
             if (this.m_isEndingScreen()) {

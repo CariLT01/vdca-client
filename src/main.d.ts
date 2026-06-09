@@ -7,6 +7,7 @@ export declare class App {
     private logBox;
     private logContent;
     private isVariantCollector;
+    private shouldWaitLonger;
     constructor();
     private emitAsync;
     private fetchAsync;
